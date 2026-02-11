@@ -7,6 +7,7 @@ import makeWASocket, {
 import pino from 'pino';
 import { exec, execSync } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -593,51 +594,75 @@ async function startMessageLoop(): Promise<void> {
   }
 }
 
-function ensureContainerSystemRunning(): void {
-  // Check if 'container' binary exists first
+function commandExists(cmd: string): boolean {
   try {
-    execSync('which container', { stdio: 'pipe' });
+    const checkCmd = os.platform() === 'win32' ? `where ${cmd}` : `which ${cmd}`;
+    execSync(checkCmd, { stdio: 'pipe' });
+    return true;
   } catch {
-    // 'container' binary not found - check for Docker as alternative
-    try {
-      execSync('which docker', { stdio: 'pipe' });
-      logger.info('Apple Container not found, but Docker is available. Container runner will use the configured CONTAINER_IMAGE.');
-      return;
-    } catch {
-      logger.warn('Neither Apple Container nor Docker found. Container agent spawning will fail at runtime.');
-      console.error('\n╔════════════════════════════════════════════════════════════════╗');
-      console.error('║  WARNING: No container runtime found                          ║');
-      console.error('║                                                                ║');
-      console.error('║  Agents need a container runtime. Install one of:             ║');
-      console.error('║  • Apple Container: github.com/apple/container/releases       ║');
-      console.error('║  • Docker: docker.com/get-started                             ║');
-      console.error('╚════════════════════════════════════════════════════════════════╝\n');
+    return false;
+  }
+}
+
+function ensureContainerSystemRunning(): void {
+  const isWindows = os.platform() === 'win32';
+
+  // On Windows/Linux, Apple Container doesn't exist — only check Docker
+  if (isWindows || os.platform() === 'linux') {
+    if (commandExists('docker')) {
+      logger.info('Docker detected as container runtime.');
       return;
     }
+    logger.warn('Docker not found. Container agent spawning will fail at runtime.');
+    console.error('\n╔════════════════════════════════════════════════════════════════╗');
+    console.error('║  WARNING: Docker not found                                    ║');
+    console.error('║                                                                ║');
+    console.error('║  Agents need Docker to run. Install from:                     ║');
+    console.error('║  • https://docker.com/get-started                             ║');
+    console.error('╚════════════════════════════════════════════════════════════════╝\n');
+    return;
   }
 
-  // Apple Container is available - check its status
-  try {
-    execSync('container system status', { stdio: 'pipe' });
-    logger.debug('Apple Container system already running');
-  } catch {
-    logger.info('Starting Apple Container system...');
+  // macOS: check for Apple Container first, then Docker
+  if (commandExists('container')) {
     try {
-      execSync('container system start', { stdio: 'pipe', timeout: 30000 });
-      logger.info('Apple Container system started');
-    } catch (err) {
-      logger.error({ err }, 'Failed to start Apple Container system');
-      console.error('\n╔════════════════════════════════════════════════════════════════╗');
-      console.error('║  FATAL: Apple Container system failed to start                 ║');
-      console.error('║                                                                ║');
-      console.error('║  Agents cannot run without Apple Container. To fix:           ║');
-      console.error('║  1. Install from: https://github.com/apple/container/releases ║');
-      console.error('║  2. Run: container system start                               ║');
-      console.error('║  3. Restart NanoClaw                                          ║');
-      console.error('╚════════════════════════════════════════════════════════════════╝\n');
-      throw new Error('Apple Container system is required but failed to start');
+      execSync('container system status', { stdio: 'pipe' });
+      logger.debug('Apple Container system already running');
+    } catch {
+      logger.info('Starting Apple Container system...');
+      try {
+        execSync('container system start', { stdio: 'pipe', timeout: 30000 });
+        logger.info('Apple Container system started');
+      } catch (err) {
+        logger.error({ err }, 'Failed to start Apple Container system');
+        console.error('\n╔════════════════════════════════════════════════════════════════╗');
+        console.error('║  FATAL: Apple Container system failed to start                 ║');
+        console.error('║                                                                ║');
+        console.error('║  Agents cannot run without Apple Container. To fix:           ║');
+        console.error('║  1. Install from: https://github.com/apple/container/releases ║');
+        console.error('║  2. Run: container system start                               ║');
+        console.error('║  3. Restart NanoClaw                                          ║');
+        console.error('╚════════════════════════════════════════════════════════════════╝\n');
+        throw new Error('Apple Container system is required but failed to start');
+      }
     }
+    return;
   }
+
+  // macOS fallback: Docker
+  if (commandExists('docker')) {
+    logger.info('Apple Container not found, but Docker is available.');
+    return;
+  }
+
+  logger.warn('Neither Apple Container nor Docker found.');
+  console.error('\n╔════════════════════════════════════════════════════════════════╗');
+  console.error('║  WARNING: No container runtime found                          ║');
+  console.error('║                                                                ║');
+  console.error('║  Agents need a container runtime. Install one of:             ║');
+  console.error('║  • Apple Container: github.com/apple/container/releases       ║');
+  console.error('║  • Docker: docker.com/get-started                             ║');
+  console.error('╚════════════════════════════════════════════════════════════════╝\n');
 }
 
 async function runDryRun(): Promise<void> {

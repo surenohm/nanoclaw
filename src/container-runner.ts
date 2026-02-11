@@ -3,7 +3,7 @@
  * Spawns agent execution in Apple Container and handles IPC
  */
 
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -17,6 +17,25 @@ import {
 } from './config.js';
 import { RegisteredGroup } from './types.js';
 import { validateAdditionalMounts } from './mount-security.js';
+
+/**
+ * Detect which container runtime to use.
+ * macOS: prefer Apple Container ('container'), fall back to 'docker'
+ * Windows/Linux: use 'docker'
+ */
+function detectContainerRuntime(): string {
+  if (os.platform() === 'darwin') {
+    try {
+      execSync('which container', { stdio: 'pipe' });
+      return 'container';
+    } catch {
+      return 'docker';
+    }
+  }
+  return 'docker';
+}
+
+const CONTAINER_RUNTIME = detectContainerRuntime();
 
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
@@ -159,7 +178,7 @@ function buildVolumeMounts(group: RegisteredGroup, isMain: boolean): VolumeMount
 function buildContainerArgs(mounts: VolumeMount[]): string[] {
   const args: string[] = ['run', '-i', '--rm'];
 
-  // Apple Container: --mount for readonly, -v for read-write
+  // Both Apple Container and Docker support --mount and -v syntax
   for (const mount of mounts) {
     if (mount.readonly) {
       args.push('--mount', `type=bind,source=${mount.hostPath},target=${mount.containerPath},readonly`);
@@ -201,7 +220,7 @@ export async function runContainerAgent(
   fs.mkdirSync(logsDir, { recursive: true });
 
   return new Promise((resolve) => {
-    const container = spawn('container', containerArgs, {
+    const container = spawn(CONTAINER_RUNTIME, containerArgs, {
       stdio: ['pipe', 'pipe', 'pipe']
     });
 
