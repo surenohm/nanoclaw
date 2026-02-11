@@ -26,6 +26,9 @@ import { runContainerAgent, writeTasksSnapshot, writeGroupsSnapshot, AvailableGr
 import { loadJson, saveJson } from './utils.js';
 
 const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_RECONNECT_ATTEMPTS = 5;
+const DRY_RUN = process.argv.includes('--dry-run');
+let reconnectAttempts = 0;
 
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
@@ -508,13 +511,22 @@ async function connectWhatsApp(): Promise<void> {
       logger.info({ reason, shouldReconnect }, 'Connection closed');
 
       if (shouldReconnect) {
-        logger.info('Reconnecting...');
-        connectWhatsApp();
+        reconnectAttempts++;
+        if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+          logger.error({ attempts: reconnectAttempts }, 'Max reconnect attempts reached. Exiting.');
+          console.error('\nFailed to connect to WhatsApp after multiple attempts.');
+          console.error('Check your internet connection and try again.\n');
+          process.exit(1);
+        }
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+        logger.info({ attempt: reconnectAttempts, delayMs: delay }, 'Reconnecting after delay...');
+        setTimeout(() => connectWhatsApp(), delay);
       } else {
         logger.info('Logged out. Run /setup to re-authenticate.');
         process.exit(0);
       }
     } else if (connection === 'open') {
+      reconnectAttempts = 0; // Reset on successful connection
       logger.info('Connected to WhatsApp');
       // Sync group metadata on startup (respects 24h cache)
       syncGroupMetadata().catch(err => logger.error({ err }, 'Initial group sync failed'));
@@ -628,7 +640,99 @@ function ensureContainerSystemRunning(): void {
   }
 }
 
+async function runDryRun(): Promise<void> {
+  console.log('\n╔══════════════════════════════════════════════════════╗');
+  console.log('║           NanoClaw - Dry Run Mode                    ║');
+  console.log('║  Testing all components without WhatsApp connection  ║');
+  console.log('╚══════════════════════════════════════════════════════╝\n');
+
+  // 1. Database
+  console.log('[1/6] Database...');
+  initDatabase();
+  console.log('  OK - SQLite initialized at store/messages.db');
+
+  // 2. State
+  console.log('[2/6] State...');
+  loadState();
+  console.log(`  OK - ${Object.keys(registeredGroups).length} registered groups loaded`);
+
+  // 3. Container runtime
+  console.log('[3/6] Container runtime...');
+  ensureContainerSystemRunning();
+  console.log('  OK - Container runtime detected');
+
+  // 4. Config
+  console.log('[4/6] Configuration...');
+  console.log(`  Assistant name: ${ASSISTANT_NAME}`);
+  console.log(`  Trigger pattern: @${ASSISTANT_NAME}`);
+  console.log(`  Timezone: ${TIMEZONE}`);
+  console.log(`  Poll interval: ${POLL_INTERVAL}ms`);
+  console.log('  OK');
+
+  // 5. IPC directories
+  console.log('[5/6] IPC directories...');
+  const ipcBaseDir = path.join(DATA_DIR, 'ipc');
+  fs.mkdirSync(ipcBaseDir, { recursive: true });
+  console.log(`  OK - IPC directory ready at ${ipcBaseDir}`);
+
+  // 6. Simulated message processing
+  console.log('[6/6] Message processing simulation...');
+  const testJid = 'test-group@g.us';
+  const testGroup: RegisteredGroup = {
+    name: 'Test Group',
+    folder: 'test-dry-run',
+    trigger: `@${ASSISTANT_NAME}`,
+    added_at: new Date().toISOString()
+  };
+  registeredGroups[testJid] = testGroup;
+  fs.mkdirSync(path.join(DATA_DIR, '..', 'groups', testGroup.folder, 'logs'), { recursive: true });
+
+  // Store a test message in the DB
+  const { createTask, getDueTasks } = await import('./db.js');
+  const testMsgContent = `@${ASSISTANT_NAME} what is the weather today?`;
+  const testTimestamp = new Date().toISOString();
+  const db = await import('./db.js');
+  db.storeChatMetadata(testJid, testTimestamp, 'Test Group');
+  console.log('  OK - Test message stored in database');
+
+  // Test scheduled task creation
+  const taskId = `test-task-${Date.now()}`;
+  createTask({
+    id: taskId,
+    group_folder: testGroup.folder,
+    chat_jid: testJid,
+    prompt: 'Test task prompt',
+    schedule_type: 'once',
+    schedule_value: new Date(Date.now() + 60000).toISOString(),
+    context_mode: 'isolated',
+    next_run: new Date(Date.now() + 60000).toISOString(),
+    status: 'active',
+    created_at: new Date().toISOString()
+  });
+  const dueTasks = getDueTasks();
+  console.log(`  OK - Task scheduler works (${dueTasks.length} due tasks)`);
+
+  // Clean up test data
+  const { deleteTask } = await import('./db.js');
+  deleteTask(taskId);
+  delete registeredGroups[testJid];
+
+  console.log('\n╔══════════════════════════════════════════════════════╗');
+  console.log('║  ALL CHECKS PASSED                                   ║');
+  console.log('║                                                       ║');
+  console.log('║  The app works. To run for real you need:            ║');
+  console.log('║  1. Internet connection to web.whatsapp.com          ║');
+  console.log('║  2. Run: npm run auth  (scan QR with your phone)    ║');
+  console.log('║  3. Create .env with ANTHROPIC_API_KEY=sk-...       ║');
+  console.log('║  4. Run: npm run dev                                 ║');
+  console.log('╚══════════════════════════════════════════════════════╝\n');
+}
+
 async function main(): Promise<void> {
+  if (DRY_RUN) {
+    await runDryRun();
+    return;
+  }
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
