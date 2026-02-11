@@ -114,7 +114,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
             const date = new Date(args.schedule_value);
             if (isNaN(date.getTime())) {
               return {
-                content: [{ type: 'text', text: `Invalid timestamp: "${args.schedule_value}". Use ISO 8601 format like "2026-02-01T15:30:00.000Z".` }],
+                content: [{ type: 'text', text: `Invalid timestamp: "${args.schedule_value}". Use local time format like "2026-02-01T15:30:00" (no Z suffix).` }],
                 isError: true
               };
             }
@@ -312,6 +312,35 @@ Use available_groups.json to find the JID for a group. The folder name should be
             content: [{
               type: 'text',
               text: `Group "${args.name}" registered. It will start receiving messages immediately.`
+            }]
+          };
+        }
+      ),
+
+      tool(
+        'refresh_groups',
+        'Force a refresh of WhatsApp group metadata (names, participants). Main group only. Useful after adding new groups or if group names are outdated.',
+        {},
+        async () => {
+          if (!isMain) {
+            return {
+              content: [{ type: 'text', text: 'Only the main group can refresh group metadata.' }],
+              isError: true
+            };
+          }
+
+          const data = {
+            type: 'refresh_groups',
+            groupFolder,
+            timestamp: new Date().toISOString()
+          };
+
+          writeIpcFile(TASKS_DIR, data);
+
+          return {
+            content: [{
+              type: 'text',
+              text: 'Group metadata refresh requested. The available_groups.json will be updated shortly.'
             }]
           };
         }

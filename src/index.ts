@@ -135,12 +135,19 @@ async function processMessage(msg: NewMessage): Promise<void> {
   const content = msg.content.trim();
   const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
 
+  // Skip empty content messages (stickers, images without captions, etc.)
+  if (!content) return;
+
   // Main group responds to all messages; other groups require trigger prefix
   if (!isMainGroup && !TRIGGER_PATTERN.test(content)) return;
 
-  // Get all messages since last agent interaction so the session has full context
+  // Get messages since last agent interaction so the session has full context
+  // Limit to last 50 messages to avoid oversized prompts on first interaction
   const sinceTimestamp = lastAgentTimestamp[msg.chat_jid] || '';
-  const missedMessages = getMessagesSince(msg.chat_jid, sinceTimestamp, ASSISTANT_NAME);
+  const allMissedMessages = getMessagesSince(msg.chat_jid, sinceTimestamp, ASSISTANT_NAME);
+  const missedMessages = allMissedMessages.slice(-50);
+
+  if (missedMessages.length === 0) return;
 
   const lines = missedMessages.map(m => {
     // Escape XML special characters in content
@@ -152,8 +159,6 @@ async function processMessage(msg: NewMessage): Promise<void> {
     return `<message sender="${escapeXml(m.sender_name)}" time="${m.timestamp}">${escapeXml(m.content)}</message>`;
   });
   const prompt = `<messages>\n${lines.join('\n')}\n</messages>`;
-
-  if (!prompt) return;
 
   logger.info({ group: group.name, messageCount: missedMessages.length }, 'Processing message');
 
@@ -491,7 +496,9 @@ async function connectWhatsApp(): Promise<void> {
     if (qr) {
       const msg = 'WhatsApp authentication required. Run /setup in Claude Code.';
       logger.error(msg);
-      exec(`osascript -e 'display notification "${msg}" with title "NanoClaw" sound name "Basso"'`);
+      if (process.platform === 'darwin') {
+        exec(`osascript -e 'display notification "${msg}" with title "NanoClaw" sound name "Basso"'`);
+      }
       setTimeout(() => process.exit(1), 1000);
     }
 
@@ -575,6 +582,29 @@ async function startMessageLoop(): Promise<void> {
 }
 
 function ensureContainerSystemRunning(): void {
+  // Check if 'container' binary exists first
+  try {
+    execSync('which container', { stdio: 'pipe' });
+  } catch {
+    // 'container' binary not found - check for Docker as alternative
+    try {
+      execSync('which docker', { stdio: 'pipe' });
+      logger.info('Apple Container not found, but Docker is available. Container runner will use the configured CONTAINER_IMAGE.');
+      return;
+    } catch {
+      logger.warn('Neither Apple Container nor Docker found. Container agent spawning will fail at runtime.');
+      console.error('\n╔════════════════════════════════════════════════════════════════╗');
+      console.error('║  WARNING: No container runtime found                          ║');
+      console.error('║                                                                ║');
+      console.error('║  Agents need a container runtime. Install one of:             ║');
+      console.error('║  • Apple Container: github.com/apple/container/releases       ║');
+      console.error('║  • Docker: docker.com/get-started                             ║');
+      console.error('╚════════════════════════════════════════════════════════════════╝\n');
+      return;
+    }
+  }
+
+  // Apple Container is available - check its status
   try {
     execSync('container system status', { stdio: 'pipe' });
     logger.debug('Apple Container system already running');

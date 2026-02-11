@@ -154,10 +154,13 @@ export function storeMessage(msg: proto.IWebMessageInfo, chatJid: string, isFrom
     msg.message?.videoMessage?.caption ||
     '';
 
+  // Skip messages with no text content (stickers, images without captions, etc.)
+  if (!content.trim()) return;
+
   const timestamp = new Date(Number(msg.messageTimestamp) * 1000).toISOString();
   const sender = msg.key.participant || msg.key.remoteJid || '';
   const senderName = pushName || sender.split('@')[0];
-  const msgId = msg.key.id || '';
+  const msgId = msg.key.id || `fallback-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   db.prepare(`INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me) VALUES (?, ?, ?, ?, ?, ?, ?)`)
     .run(msgId, chatJid, sender, senderName, content, timestamp, isFromMe ? 1 : 0);
