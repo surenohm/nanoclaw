@@ -9,6 +9,7 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "dry-run": "tsx src/index.ts --dry-run",
+    "dashboard": "tsx src/web-server.ts --web-only",
     "auth": "tsx src/whatsapp-auth.ts",
     "typecheck": "tsc --noEmit"
   },
@@ -16,6 +17,7 @@
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "better-sqlite3": "^11.8.1",
     "cron-parser": "^5.5.0",
+    "express": "^5.2.1",
     "pino": "^9.6.0",
     "pino-pretty": "^13.0.0",
     "qrcode-terminal": "^0.12.0",
@@ -23,6 +25,7 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
+    "@types/express": "^5.0.6",
     "@types/node": "^22.10.0",
     "@types/qrcode-terminal": "^0.12.2",
     "tsx": "^4.19.0",
